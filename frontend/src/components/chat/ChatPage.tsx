@@ -1,29 +1,29 @@
-import { useState, useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Sparkles } from "lucide-react";
-import { sendChatMessage } from "../../lib/api";
-import { useSessionStore } from "../../stores/sessionStore";
+import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
-
-const CONCEPT_LABELS: Record<string, string> = {
-  sci_photosynthesis: "Photosynthesis",
-  math_fractions_basic: "Fractions",
-  math_fractions_operations: "Fraction Operations",
-  ct_loops: "Loops in Code",
-  ct_conditionals: "Conditionals",
-  sci_force_motion: "Force & Motion",
-  jee_kinematics_1d: "1D Kinematics",
-  jee_limits: "Limits (Calculus)",
-};
+import { listConcepts, sendChatMessageStream } from "../../lib/api";
+import { useSessionStore } from "../../stores/sessionStore";
 
 export default function ChatPage() {
   const params = useParams();
   const {
-    studentId, conceptId, messages, isLoading, sessionId,
-    addMessage, setLoading, setConceptId,
+    studentId, conceptId, messages, isLoading, sessionId, students,
+    addMessage, appendToLastMessage, setLoading, setConceptId, clearMessages,
   } = useSessionStore();
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Derive segment from selected student (needed for concept list)
+  const selectedStudent = students.find((s) => s.id === studentId);
+  const segment = selectedStudent?.segment ?? "school";
+
+  const { data: concepts = [] } = useQuery({
+    queryKey: ["concepts", segment],
+    queryFn: () => listConcepts(segment),
+    staleTime: 10 * 60 * 1000,
+  });
 
   useEffect(() => {
     if (params.conceptId) setConceptId(params.conceptId);
@@ -33,44 +33,57 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const currentConceptName =
+    concepts.find((c) => c.id === conceptId)?.name ?? conceptId;
+
   async function handleSend() {
     if (!input.trim() || isLoading) return;
     const userMsg = input.trim();
     setInput("");
     addMessage({ role: "student", content: userMsg });
+    addMessage({ role: "tutor", content: "" });  // placeholder bubble for streaming
     setLoading(true);
 
     try {
-      const history = messages.map((m) => ({ role: m.role === "student" ? "user" : "assistant", content: m.content }));
-      const res = await sendChatMessage({
-        student_id: studentId,
-        concept_id: conceptId,
-        message: userMsg,
-        history,
-        session_id: sessionId ?? undefined,
-      });
-      addMessage({
-        role: "tutor",
-        content: res.response,
-        focus_cue: res.focus_cue,
-        reflection_prompt: res.reflection_prompt,
-      });
+      const history = messages.map((m) => ({
+        role: m.role === "student" ? "user" : "assistant",
+        content: m.content,
+      }));
+      await sendChatMessageStream(
+        { student_id: studentId, concept_id: conceptId, message: userMsg,
+          history, session_id: sessionId ?? undefined },
+        (char) => appendToLastMessage(char),
+        () => setLoading(false),
+      );
     } catch {
-      addMessage({ role: "tutor", content: "I'm having a little trouble connecting. Try again in a moment?" });
-    } finally {
+      appendToLastMessage("I'm having a little trouble connecting. Try again in a moment?");
       setLoading(false);
     }
   }
 
+  const lastMsg = messages[messages.length - 1];
+  const isWaitingForFirstChar =
+    isLoading && lastMsg?.role === "tutor" && lastMsg?.content === "";
+
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)]">
-      {/* Header */}
+      {/* Header with concept selector */}
       <div className="px-4 py-3 border-b border-gray-100 bg-white flex items-center gap-2">
-        <Sparkles className="w-4 h-4 text-brand-600" />
-        <span className="font-medium text-gray-900 text-sm">
-          {CONCEPT_LABELS[conceptId] ?? conceptId}
-        </span>
-        <span className="ml-auto text-xs text-gray-400">BrainGuide</span>
+        <Sparkles className="w-4 h-4 text-brand-600 shrink-0" />
+        <select
+          value={conceptId}
+          onChange={(e) => {
+            setConceptId(e.target.value);
+            clearMessages();
+          }}
+          className="font-medium text-gray-900 text-sm border-none bg-transparent cursor-pointer focus:outline-none flex-1 min-w-0"
+        >
+          {concepts.length === 0 && <option value={conceptId}>{currentConceptName}</option>}
+          {concepts.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        <span className="ml-auto text-xs text-gray-400 shrink-0">BrainGuide</span>
       </div>
 
       {/* Messages */}
@@ -82,7 +95,7 @@ export default function ChatPage() {
             className="text-center text-gray-400 text-sm mt-12"
           >
             <div className="text-3xl mb-3">🌱</div>
-            <p>Ask me anything about <strong>{CONCEPT_LABELS[conceptId] ?? conceptId}</strong>.</p>
+            <p>Ask me anything about <strong>{currentConceptName}</strong>.</p>
             <p className="text-xs mt-1">I'll guide you to discover it yourself.</p>
           </motion.div>
         )}
@@ -102,7 +115,21 @@ export default function ChatPage() {
                     : "bg-white border border-gray-100 text-gray-800 rounded-bl-sm shadow-sm"
                 }`}
               >
-                {msg.content}
+                {msg.content || (
+                  /* Show dots only while waiting for the very first character */
+                  isWaitingForFirstChar && i === messages.length - 1 ? (
+                    <div className="flex gap-1 py-1">
+                      {[0, 1, 2].map((j) => (
+                        <motion.div
+                          key={j}
+                          className="w-2 h-2 bg-gray-300 rounded-full"
+                          animate={{ y: [0, -4, 0] }}
+                          transition={{ repeat: Infinity, duration: 0.8, delay: j * 0.2 }}
+                        />
+                      ))}
+                    </div>
+                  ) : null
+                )}
                 {msg.focus_cue && (
                   <div className="mt-2 pt-2 border-t border-brand-100 text-xs text-brand-200 italic">
                     {msg.focus_cue}
@@ -113,22 +140,6 @@ export default function ChatPage() {
           ))}
         </AnimatePresence>
 
-        {isLoading && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
-            <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
-              <div className="flex gap-1">
-                {[0, 1, 2].map((i) => (
-                  <motion.div
-                    key={i}
-                    className="w-2 h-2 bg-gray-300 rounded-full"
-                    animate={{ y: [0, -4, 0] }}
-                    transition={{ repeat: Infinity, duration: 0.8, delay: i * 0.2 }}
-                  />
-                ))}
-              </div>
-            </div>
-          </motion.div>
-        )}
         <div ref={bottomRef} />
       </div>
 

@@ -6,8 +6,9 @@ without a running LLM. Activated via LLM_PROVIDER=mock in .env.
 
 from __future__ import annotations
 
+import asyncio
 import random
-from typing import Any
+from typing import Any, AsyncIterator
 
 from .llm_provider import LLMProvider
 
@@ -155,6 +156,19 @@ class MockLLMProvider(LLMProvider):
                 return q
 
         return random.choice(_SOCRATIC_RESPONSES)
+
+    async def stream_chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """Simulate streaming by yielding the full mock response word by word."""
+        full = await self.chat(system_prompt, messages, temperature, max_tokens)
+        for word in full.split(" "):
+            yield word + " "
+            await asyncio.sleep(0.05)
 
     async def embed(self, text: str) -> list[float]:
         import hashlib

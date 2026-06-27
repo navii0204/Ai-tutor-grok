@@ -21,6 +21,7 @@ from src.core.database import create_all_tables
 from src.core.logging_config import configure_logging, get_logger
 from src.core.multimodal_context.llm_provider import LLMProvider, OllamaProvider
 from src.core.multimodal_context.mock_llm import MockLLMProvider
+from src.core.multimodal_context.claude_provider import ClaudeProvider
 from src.core.curriculum_mapper.registry import CurriculumRegistry
 from src.core.simulator.registry import SimulatorRegistry
 from src.core.simulator.robot_sim import RobotSimulator
@@ -42,11 +43,22 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     log.info("brainecosystem_starting", env=settings.app_env)
 
-    # LLM provider — use mock when provider=mock or when Ollama is unreachable
+    # LLM provider — selected by LLM_PROVIDER env var, falls back to mock on failure
     llm: LLMProvider
     if settings.llm.provider == "mock":
         llm = MockLLMProvider()
         log.info("llm_provider", mode="mock")
+    elif settings.llm.provider == "claude":
+        try:
+            llm = ClaudeProvider()
+            if not await llm.health_check():
+                log.warning("claude_health_check_failed", fallback="mock")
+                llm = MockLLMProvider()
+            else:
+                log.info("llm_provider", mode="claude", model=settings.llm.model)
+        except ValueError as exc:
+            log.warning("claude_config_error", error=str(exc), fallback="mock")
+            llm = MockLLMProvider()
     else:
         llm = OllamaProvider()
         if not await llm.health_check():

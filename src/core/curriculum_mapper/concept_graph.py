@@ -82,7 +82,8 @@ class ConceptGraph:
         result = [
             node
             for node in self._nodes.values()
-            if node.grade == grade and (subject is None or node.subject == subject)
+            if (not grade or node.grade == grade)
+            and (subject is None or node.subject == subject)
         ]
         return sorted(result, key=lambda n: n.name)
 

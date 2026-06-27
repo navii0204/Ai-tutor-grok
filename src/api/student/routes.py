@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api.dependencies import (
@@ -66,6 +68,33 @@ async def get_student_profile(
             "total_sessions": m.total_sessions if m else 0,
             "concepts_mastered_count": m.concepts_mastered_count if m else 0,
         } if m else {},
+    }
+
+
+# ── Student List ──────────────────────────────────────────────────────────────
+
+@router.get("/list")
+async def list_students(
+    service: StudentServiceDep,
+    settings: SettingsDep,
+    tenant_id: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """List all students for a tenant. Powers the student-picker UI dropdown."""
+    resolved_tenant = tenant_id or settings.default_tenant_id
+    students = await service.list_students(resolved_tenant, limit=limit)
+    return {
+        "tenant_id": resolved_tenant,
+        "students": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "grade": s.grade,
+                "segment": s.segment,
+                "external_id": s.external_id,
+            }
+            for s in students
+        ],
     }
 
 
@@ -188,6 +217,74 @@ async def socratic_chat(
         "reflection_prompt": response.reflection_prompt,
         "mastery_delta": response.mastery_delta,
     }
+
+
+# ── Streaming Chat ────────────────────────────────────────────────────────────
+
+@router.post("/chat/stream")
+async def socratic_chat_stream(
+    req: ChatRequest,
+    service: StudentServiceDep,
+    engine: SocraticDep,
+    curriculum: CurriculumDep,
+    context_builder: ContextBuilderDep,
+) -> StreamingResponse:
+    """SSE streaming version of /chat. Yields guard-approved text char by char.
+
+    Uses buffer-then-stream: full LLM response is collected, SocraticGuard is
+    applied to the complete text, then the approved response streams to the client.
+    Mastery update is NOT performed here — use /chat for that side effect.
+    """
+    student = await service.get_student(req.student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    segment = student.segment
+    plugin = curriculum.get(segment)
+    concept = plugin.get_concept(req.concept_id)
+    if not concept:
+        raise HTTPException(status_code=404, detail=f"Concept '{req.concept_id}' not found")
+
+    mastery_entry = next(
+        (cm for cm in (student.concept_masteries or []) if cm.concept_id == req.concept_id),
+        None,
+    )
+    mastery_score = mastery_entry.mastery_score if mastery_entry else 0.0
+    confidence = mastery_entry.confidence if mastery_entry else 0.5
+
+    sim_snapshot = None
+    if req.simulator_state:
+        sim_snapshot = SimulatorStateSnapshot(
+            simulator_id=req.simulator_state.get("simulator_id", "unknown"),
+            state_description=req.simulator_state.get("description", ""),
+            raw_state=req.simulator_state,
+        )
+
+    ctx = context_builder.build(
+        student=student,
+        concept=concept,
+        mastery_score=mastery_score,
+        confidence=confidence,
+        session_type="chat",
+        simulator_snapshot=sim_snapshot,
+    )
+
+    history = [
+        DialogueTurn(role=t["role"], content=t["content"]) for t in req.history
+    ]
+
+    async def event_stream():
+        async for char in engine.stream_respond(
+            student_id=req.student_id,
+            student_message=req.message,
+            history=history,
+            concept_id=req.concept_id,
+            student_context=ctx.to_llm_dict(),
+        ):
+            yield f"data: {json.dumps({'char': char})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # ── Simulator ─────────────────────────────────────────────────────────────────

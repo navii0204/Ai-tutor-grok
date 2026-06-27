@@ -7,8 +7,9 @@ the LLM is overloaded.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -38,6 +39,23 @@ class LLMProvider(ABC):
 
     @abstractmethod
     async def health_check(self) -> bool:
+        ...
+
+    @abstractmethod
+    async def stream_chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """Yield text chunks as generated. Implementations without native streaming
+        MUST simulate it by chunking the full response."""
+        ...
+
+    @abstractmethod
+    async def aclose(self) -> None:
+        """Release any held resources (HTTP clients, SDK connections, etc.)."""
         ...
 
 
@@ -103,6 +121,20 @@ class OllamaProvider(LLMProvider):
             return resp.status_code == 200
         except Exception:
             return False
+
+    async def stream_chat(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """Simulate streaming by yielding the full Ollama response word by word.
+        Native Ollama SSE streaming is left as a future optimisation."""
+        full = await self.chat(system_prompt, messages, temperature, max_tokens)
+        for word in full.split(" "):
+            yield word + " "
+            await asyncio.sleep(0.04)
 
     async def aclose(self) -> None:
         await self._client.aclose()

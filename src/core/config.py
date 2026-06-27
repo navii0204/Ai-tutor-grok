@@ -16,7 +16,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class LLMSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
-    provider: Literal["ollama", "llamacpp", "openai_compat"] = "ollama"
+    provider: Literal["ollama", "llamacpp", "openai_compat", "claude", "mock"] = "ollama"
+    api_key: str = ""
     base_url: str = "http://localhost:11434"
     model: str = "llama3.2:3b"
     timeout: int = 60

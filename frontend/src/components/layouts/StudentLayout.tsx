@@ -1,6 +1,9 @@
+import { useEffect } from "react";
 import { Outlet, NavLink } from "react-router-dom";
-import { motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import { BookOpen, MessageCircle, Cpu, LayoutDashboard } from "lucide-react";
+import { listStudents } from "../../lib/api";
+import { useSessionStore } from "../../stores/sessionStore";
 
 const navItems = [
   { to: "/student/dashboard", icon: LayoutDashboard, label: "Home" },
@@ -9,6 +12,18 @@ const navItems = [
 ];
 
 export default function StudentLayout() {
+  const { studentId, setStudentId, clearMessages, setStudents } = useSessionStore();
+
+  const { data: students = [] } = useQuery({
+    queryKey: ["students"],
+    queryFn: () => listStudents("demo-school-001"),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  useEffect(() => {
+    if (students.length > 0) setStudents(students);
+  }, [students]);
+
   return (
     <div className="min-h-screen flex flex-col">
       {/* Top bar */}
@@ -17,7 +32,23 @@ export default function StudentLayout() {
           <BookOpen className="w-4 h-4 text-white" />
         </div>
         <span className="font-semibold text-gray-900">BrainEcosystem</span>
-        <span className="ml-auto text-xs text-gray-400">Student</span>
+        <select
+          value={studentId}
+          onChange={(e) => {
+            setStudentId(e.target.value);
+            clearMessages();
+          }}
+          className="ml-auto text-xs text-gray-600 border border-gray-200 rounded-lg px-2 py-1 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500"
+        >
+          {students.length === 0 && (
+            <option value={studentId}>Loading…</option>
+          )}
+          {students.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name} (Gr. {s.grade})
+            </option>
+          ))}
+        </select>
       </header>
 
       {/* Main content */}

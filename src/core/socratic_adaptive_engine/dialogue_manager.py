@@ -12,7 +12,8 @@ The guard layer is always applied before returning a response.
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import Any, AsyncIterator
 
 from src.core.logging_config import get_logger
 from src.core.multimodal_context.llm_provider import LLMProvider
@@ -108,6 +109,46 @@ class SocraticDialogueManager(SocraticEngineInterface):
             mastery_delta=mastery_delta,
             reasoning_correct=reasoning_correct,
         )
+
+    async def stream_respond(
+        self,
+        student_id: str,
+        student_message: str,
+        history: list[DialogueTurn],
+        concept_id: str,
+        student_context: dict[str, Any],
+    ) -> AsyncIterator[str]:
+        """Buffer-then-stream: collect full LLM output, guard it, yield char-by-char.
+
+        CRITICAL SAFETY CONSTRAINT: We MUST buffer the full LLM response before
+        streaming any of it to the client. Streaming raw output would let the first
+        tokens of a direct answer reach the student before SocraticGuard detects
+        the pattern. Buffer first → guard on complete text → re-stream approved text.
+        """
+        system_prompt = self._build_system_prompt(student_context)
+        messages = self._history_to_messages(history)
+        messages.append({"role": "user", "content": student_message})
+
+        # Phase 1: Buffer the full response from the LLM stream
+        buffer: list[str] = []
+        async for chunk in self._llm.stream_chat(system_prompt=system_prompt, messages=messages):
+            buffer.append(chunk)
+        raw = "".join(buffer)
+
+        # Phase 2: Guard the complete buffered text
+        guard_result = self._guard.check(raw)
+        if not guard_result.passed:
+            log.warning(
+                "socratic_guard_triggered",
+                student_id=student_id,
+                reason=guard_result.reason,
+            )
+        final_text = guard_result.sanitised_text
+
+        # Phase 3: Re-stream the guard-approved text character by character
+        for char in final_text:
+            yield char
+            await asyncio.sleep(0.008)  # ~125 chars/sec — comfortable reading pace
 
     async def generate_opening_question(
         self, concept_id: str, student_context: dict[str, Any]
