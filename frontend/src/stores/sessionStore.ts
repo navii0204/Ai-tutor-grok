@@ -22,7 +22,7 @@ interface SessionState {
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
-  studentId: "demo-student-001",
+  studentId: "6d8ea3f0-8049-48be-a854-26af4f4fa12c",  // Arjun Sharma (seeded)
   sessionId: null,
   conceptId: "sci_photosynthesis",
   messages: [],

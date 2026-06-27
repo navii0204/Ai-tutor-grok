@@ -80,7 +80,10 @@ class StudentRepository:
             .where(StudentProfile.tenant_id == tenant_id)
             .limit(limit)
             .offset(offset)
-            .options(selectinload(StudentProfile.holistic_markers))
+            .options(
+                selectinload(StudentProfile.holistic_markers),
+                selectinload(StudentProfile.concept_masteries),
+            )
         )
         return list(result.scalars().all())
 

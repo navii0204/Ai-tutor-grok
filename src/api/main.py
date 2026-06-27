@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse
 from src.core.config import get_settings
 from src.core.database import create_all_tables
 from src.core.logging_config import configure_logging, get_logger
-from src.core.multimodal_context.llm_provider import OllamaProvider
+from src.core.multimodal_context.llm_provider import LLMProvider, OllamaProvider
+from src.core.multimodal_context.mock_llm import MockLLMProvider
 from src.core.curriculum_mapper.registry import CurriculumRegistry
 from src.core.simulator.registry import SimulatorRegistry
 from src.core.simulator.robot_sim import RobotSimulator
@@ -41,8 +42,18 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     log.info("brainecosystem_starting", env=settings.app_env)
 
-    # LLM provider
-    llm = OllamaProvider()
+    # LLM provider — use mock when provider=mock or when Ollama is unreachable
+    llm: LLMProvider
+    if settings.llm.provider == "mock":
+        llm = MockLLMProvider()
+        log.info("llm_provider", mode="mock")
+    else:
+        llm = OllamaProvider()
+        if not await llm.health_check():
+            log.warning("ollama_unreachable", fallback="mock")
+            llm = MockLLMProvider()
+        else:
+            log.info("llm_provider", mode="ollama", model=settings.llm.model)
     app.state.llm = llm
 
     # Curriculum registry
