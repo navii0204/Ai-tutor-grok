@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.db
+*.egg-info/
+.coverage
+htmlcov/
+node_modules/
+dist/
+.vite/
+brainecosystem.db
